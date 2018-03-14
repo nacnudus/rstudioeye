@@ -1,7 +1,7 @@
 Exploratory analysis of tidyverse activity
 ================
 Duncan Garmonsway
-Wed Mar 14 23:32:16 2018
+Wed Mar 14 23:52:16 2018
 
 ``` r
 library(tidyverse)
@@ -103,11 +103,12 @@ tidyverse_commits <-
   # slice(1:10) %>%
   mutate(repo = basename(repo_dir),
          committed = ymd_hms(map_chr(commit, when)),
-         committer = map_chr(commit, ~ .x@committer@email))
+         name = map_chr(commit, ~ .x@committer@name),
+         email = map_chr(commit, ~ .x@committer@email))
 tidyverse_commits
 ```
 
-    ## # A tibble: 22,376 x 5
+    ## # A tibble: 22,376 x 6
     ##    repo_dir                               commit repo  committed          
     ##    <fs::path>                             <list> <chr> <dttm>             
     ##  1 /home/nacnudus/R/rstudioeye/repos/blob <S4: … blob  2017-11-30 10:35:21
@@ -120,22 +121,22 @@ tidyverse_commits
     ##  8 /home/nacnudus/R/rstudioeye/repos/blob <S4: … blob  2017-11-29 09:40:10
     ##  9 /home/nacnudus/R/rstudioeye/repos/blob <S4: … blob  2017-11-29 09:39:44
     ## 10 /home/nacnudus/R/rstudioeye/repos/blob <S4: … blob  2017-11-29 09:38:20
-    ## # ... with 22,366 more rows, and 1 more variable: committer <chr>
+    ## # ... with 22,366 more rows, and 2 more variables: name <chr>, email <chr>
 
 ``` r
 periodically <-
   tidyverse_commits %>%
-  arrange(committed, repo, committer) %>%
+  arrange(committed, repo, email) %>%
   as_tbl_time(index = committed) %>%
-  select(repo, committed, committer) %>%
+  select(repo, committed, email) %>%
   collapse_by("weekly", start_date = min(floor_date(.$committed, "week"))) %>%
-  count(repo, committed, committer)
+  count(repo, committed, email)
 periodically
 ```
 
     ## # A time tibble: 3,302 x 4
     ## # Index: committed
-    ##    repo  committed           committer                    n
+    ##    repo  committed           email                        n
     ##    <chr> <dttm>              <chr>                    <int>
     ##  1 blob  2016-10-28 16:43:49 h.wickham@gmail.com         11
     ##  2 blob  2016-10-28 16:43:49 james.f.hester@gmail.com     1
@@ -149,13 +150,15 @@ periodically
     ## 10 broom 2014-07-11 15:30:23 dgrtwo@princeton.edu         6
     ## # ... with 3,292 more rows
 
+People have used multiple email addresses
+
 ``` r
-committers <- count(tidyverse_commits, committer, sort = TRUE)
-committers
+committers <- count(tidyverse_commits, email, sort = TRUE)
+print(committers, n = 20)
 ```
 
     ## # A tibble: 344 x 2
-    ##    committer                           n
+    ##    email                               n
     ##    <chr>                           <int>
     ##  1 h.wickham@gmail.com             10368
     ##  2 romain@r-enthusiasts.com         2104
@@ -167,13 +170,70 @@ committers
     ##  8 jenny@stat.ubc.ca                 611
     ##  9 grolemund@gmail.com               601
     ## 10 james.f.hester@gmail.com          592
-    ## # ... with 334 more rows
+    ## 11 spinuvit@gmail.com                565
+    ## 12 jenny.f.bryan@gmail.com           224
+    ## 13 takahashi.kohske@gmail.com        219
+    ## 14 ld.mcgowan@vanderbilt.edu         178
+    ## 15 dgrtwo@princeton.edu              177
+    ## 16 stefan@stefanbache.dk             116
+    ## 17 krlmlr@users.noreply.github.com    90
+    ## 18 drobinson@stackoverflow.com        85
+    ## 19 irisson@normalesup.org             57
+    ## 20 dchiu@bccrc.ca                     50
+    ## # ... with 324 more rows
+
+People have used multiple names
+
+``` r
+committers <- count(tidyverse_commits, name, sort = TRUE)
+print(committers, n = 20)
+```
+
+    ## # A tibble: 351 x 2
+    ##    name                           n
+    ##    <chr>                      <int>
+    ##  1 hadley                      9215
+    ##  2 Kirill Müller               2419
+    ##  3 Romain François             1481
+    ##  4 Lionel Henry                1107
+    ##  5 Hadley Wickham              1079
+    ##  6 GitHub                       765
+    ##  7 Winston Chang                692
+    ##  8 Romain Francois              644
+    ##  9 jennybc                      620
+    ## 10 Jim Hester                   592
+    ## 11 Vitalie Spinu                565
+    ## 12 garrettgman                  324
+    ## 13 Garrett                      264
+    ## 14 Lucy                         178
+    ## 15 Jenny Bryan                  164
+    ## 16 dgrtwo                       147
+    ## 17 Kohske Takahashi @ jurina     96
+    ## 18 Dave Robinson                 85
+    ## 19 hadley wickham                74
+    ## 20 Kohske Takahashi at Haruna    65
+    ## # ... with 331 more rows
+
+Distribution of commits by committers
+
+``` r
+committers %>%
+  slice(1:20) %>%
+  mutate(name = fct_reorder(name, n)) %>%
+  ggplot(aes(name, n)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(position = "right") +
+  coord_flip() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+![](temp_files/figure-gfm/unnamed-chunk-6-1.png)<!-- -->
 
 Plot a committer’s commits over time, by package
 
 ``` r
 periodically %>%
-  filter(committer == "jenny@stat.ubc.ca") %>%
+  filter(email %in% c("jenny@stat.ubc.ca", "jenny.f.bryan@gmail.com  ")) %>%
   ggplot(aes(committed, n)) +
   geom_bar(stat = "identity") +
   facet_grid(repo ~ .) +
@@ -185,4 +245,4 @@ periodically %>%
         axis.text.y = element_blank())
 ```
 
-![](temp_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+![](temp_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->

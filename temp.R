@@ -43,24 +43,40 @@ tidyverse_commits <-
   # slice(1:10) %>%
   mutate(repo = basename(repo_dir),
          committed = ymd_hms(map_chr(commit, when)),
-         committer = map_chr(commit, ~ .x@committer@email))
+         name = map_chr(commit, ~ .x@committer@name),
+         email = map_chr(commit, ~ .x@committer@email))
 tidyverse_commits
 
 periodically <-
   tidyverse_commits %>%
-  arrange(committed, repo, committer) %>%
+  arrange(committed, repo, email) %>%
   as_tbl_time(index = committed) %>%
-  select(repo, committed, committer) %>%
+  select(repo, committed, email) %>%
   collapse_by("weekly", start_date = min(floor_date(.$committed, "week"))) %>%
-  count(repo, committed, committer)
+  count(repo, committed, email)
 periodically
 
-committers <- count(tidyverse_commits, committer, sort = TRUE)
-committers
+#' People have used multiple email addresses
+committers <- count(tidyverse_commits, email, sort = TRUE)
+print(committers, n = 20)
+
+#' People have used multiple names
+committers <- count(tidyverse_commits, name, sort = TRUE)
+print(committers, n = 20)
+
+#' Distribution of commits by committers
+committers %>%
+  slice(1:20) %>%
+  mutate(name = fct_reorder(name, n)) %>%
+  ggplot(aes(name, n)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(position = "right") +
+  coord_flip() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 #' Plot a committer's commits over time, by package
 periodically %>%
-  filter(committer == "jenny@stat.ubc.ca") %>%
+  filter(email %in% c("jenny@stat.ubc.ca", "jenny.f.bryan@gmail.com  ")) %>%
   ggplot(aes(committed, n)) +
   geom_bar(stat = "identity") +
   facet_grid(repo ~ .) +
