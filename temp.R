@@ -86,3 +86,21 @@ periodically %>%
   theme(panel.grid.major.y = element_blank(),
         panel.grid.minor = element_blank(),
         axis.text.y = element_blank())
+
+#' Look up a commit's user's username via the SHA and the API
+first_commits <-
+  tidyverse_commits %>%
+  mutate(sha = map_chr(commit, ~ .x@sha)) %>%
+  group_by(email) %>%
+  summarise(n = n(), first_sha = first(sha)) %>%
+  arrange(desc(n)) %>%
+  slice(1:20) %>%
+  print(n = Inf)
+
+xcommit <- gh("/search/commits?q=hash:2bd18518ad35776f7daada5c3badc10005d69ba4",
+              .send_headers = c("Accept" = "application/vnd.github.cloak-preview"))
+xcommit$items[[1]]$committer$login
+
+xcommit <- gh("/search/commits?q=hash:0078d75da7b4af5adfd754a1cf59216f34870d0d",
+              .send_headers = c("Accept" = "application/vnd.github.cloak-preview"))
+xcommit$items[[1]]$committer$login
