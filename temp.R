@@ -12,21 +12,34 @@ library(lubridate)
 library(tibbletime)
 library(here)
 
+rate_limit <- function() gh("/rate_limit")
+rate_limit()
+
 dir_create(here::here("repos"))
 
 tidyverse_members <- gh("/orgs/:org/members", org = "tidyverse")
 member_names <- map_chr(tidyverse_members, ~ .x[["login"]])
 
-tidyverse_repos <- gh("/orgs/:org/repos", org = "tidyverse")
-
-#' Clone/pull all the repos locally
-tidyverse_repos %>%
+tidyverse_repos <-
+  gh("/orgs/:org/repos", org = "tidyverse") %>%
   map_chr(~ .x[["ssh_url"]]) %>%
   tibble(name = str_extract(basename(.), "^.*(?=\\.)"),
          url = .,
-         local_path = path("repos", name)) %>%
-  # pwalk(~ clone(..2, ..3)) %>%
-  # pwalk(~ pull(repository(..3))) %>%
+         local_path = path_abs(path("repos", name)))
+
+repo_dirs <- dir_ls(here::here("repos"))
+
+existing_repos <- filter(tidyverse_repos, local_path %in% repo_dirs)
+new_repos <- anti_join(tidyverse_repos, existing_repos, by = "local_path")
+
+#' Clone new repos locally
+new_repos %>%
+  pwalk(~ clone(..2, ..3)) %>%
+  print(n = Inf)
+
+#' Pull existing repos locally
+existing_repos %>%
+  pwalk(~ pull(repository(..3))) %>%
   print(n = Inf)
 
 repo_dirs <- dir_ls(here::here("repos"))
@@ -35,72 +48,101 @@ repo_dirs <- dir_ls(here::here("repos"))
 commits(repository(as.character(repo_dirs[1]))) %>%
   .[[1]] %>% str()
 
+#' Import all commits
 tidyverse_commits <-
   repo_dirs %>%
   tibble(repo_dir = .,
          commit = map(repo_dir, ~ commits(repository(as.character(.x))))) %>%
   unnest() %>%
-  # slice(1:10) %>%
   mutate(repo = basename(repo_dir),
          committed = ymd_hms(map_chr(commit, when)),
          name = map_chr(commit, ~ .x@committer@name),
-         email = map_chr(commit, ~ .x@committer@email))
-tidyverse_commits
-
-periodically <-
-  tidyverse_commits %>%
-  arrange(committed, repo, email) %>%
-  as_tbl_time(index = committed) %>%
-  select(repo, committed, email) %>%
-  collapse_by("weekly", start_date = min(floor_date(.$committed, "week"))) %>%
-  count(repo, committed, email)
-periodically
+         email = map_chr(commit, ~ .x@committer@email)) %>%
+  print()
 
 #' People have used multiple email addresses
-committers <- count(tidyverse_commits, email, sort = TRUE)
-print(committers, n = 20)
+committer_emails <- count(tidyverse_commits, email, sort = TRUE)
+print(committer_emails, n = 20)
 
 #' People have used multiple names
-committers <- count(tidyverse_commits, name, sort = TRUE)
-print(committers, n = 20)
+committer_names <- count(tidyverse_commits, name, sort = TRUE)
+print(committer_names, n = 20)
 
-#' Distribution of commits by committers
-committers %>%
+#' Look up a commit's user's username via the SHA and the API
+commit_login <- function(repo, sha) {
+  commit <- gh("/repos/:owner/:repo/commits/:sha",
+               owner = "tidyverse",
+               repo = repo,
+               sha = sha)
+  out <- commit$committer$login
+  if(is.null(out)) {
+    out <- commit$commit$committer$name
+  }
+  if(is.null(out)) return(NA)
+  cat(out, "\n")
+  out
+}
+logins <-
+  tidyverse_commits %>%
+  mutate(sha = map_chr(commit, ~ .x@sha)) %>%
+  group_by(email) %>%
+  summarise(n = n(),
+            last_repo = last(repo),
+            last_sha = last(sha)) %>%
+  arrange(desc(n)) %>%
+  mutate(login = pmap_chr(list(last_repo, last_sha), commit_login)) %>%
+  print()
+
+#' Resolve commits to logins
+named_commits <-
+  logins %>%
+  select(email, login) %>%
+  right_join(tidyverse_commits, by = "email") %>%
+  select(repo, login, committed, commit)
+
+#' Distribution of commits by login
+named_commits %>%
+  count(login, sort = TRUE) %>%
   slice(1:20) %>%
-  mutate(name = fct_reorder(name, n)) %>%
-  ggplot(aes(name, n)) +
+  mutate(login = fct_reorder(login, n)) %>%
+  ggplot(aes(login, n)) +
   geom_bar(stat = "identity") +
   scale_y_continuous(position = "right") +
   coord_flip() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
+#' Construct tibbletime
+periodically <-
+  named_commits %>%
+  arrange(committed, repo, login) %>%
+  as_tbl_time(index = committed) %>%
+  select(repo, committed, login) %>%
+  collapse_by("weekly", start_date = min(floor_date(.$committed, "week"))) %>%
+  count(repo, committed, login)
+periodically
+
 #' Plot a committer's commits over time, by package
+committer <- "hadley"
 periodically %>%
-  filter(email %in% c("jenny@stat.ubc.ca", "jenny.f.bryan@gmail.com  ")) %>%
-  ggplot(aes(committed, n)) +
-  geom_bar(stat = "identity") +
+  filter(login == committer) %>%
+  group_by(repo) %>%
+  mutate(max_n = max(n)) %>%
+  distinct(repo, max_n) %>%
+  arrange(desc(max_n)) %>%
+  slice(1:min(10, nrow(.))) %>%
+  select(repo) %>%
+  inner_join(periodically, by = "repo") %>%
+  filter(committed >= Sys.time() - years(1)) %>%
+  mutate(login = fct_rev(fct_other(as_factor(login), committer)),
+         repo = as.factor(repo)) %>%
+  ggplot(aes(committed, n, fill = login)) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = c("grey70", "blue")) +
   facet_grid(repo ~ .) +
   xlab("") +
   ylab("") +
   theme_minimal() +
   theme(panel.grid.major.y = element_blank(),
         panel.grid.minor = element_blank(),
-        axis.text.y = element_blank())
-
-#' Look up a commit's user's username via the SHA and the API
-first_commits <-
-  tidyverse_commits %>%
-  mutate(sha = map_chr(commit, ~ .x@sha)) %>%
-  group_by(email) %>%
-  summarise(n = n(), first_sha = first(sha)) %>%
-  arrange(desc(n)) %>%
-  slice(1:20) %>%
-  print(n = Inf)
-
-xcommit <- gh("/search/commits?q=hash:2bd18518ad35776f7daada5c3badc10005d69ba4",
-              .send_headers = c("Accept" = "application/vnd.github.cloak-preview"))
-xcommit$items[[1]]$committer$login
-
-xcommit <- gh("/search/commits?q=hash:0078d75da7b4af5adfd754a1cf59216f34870d0d",
-              .send_headers = c("Accept" = "application/vnd.github.cloak-preview"))
-xcommit$items[[1]]$committer$login
+        axis.text.y = element_blank(),
+        panel.background = element_rect(fill = "grey95"))
